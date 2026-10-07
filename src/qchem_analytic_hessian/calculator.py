@@ -2,22 +2,27 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from ase.calculators.calculator import FileIOCalculator, all_changes
+from ase import Atoms
+from ase.calculators.calculator import CalculationFailed, FileIOCalculator, all_changes
 from ase.calculators.qchem import QChem
+from ase.vibrations import VibrationsData
 
-from qchem_analytic_hessian.parser import QChemHessianData, parse_qchem_hessian_output
+from qchem_analytic_hessian.parser import (
+    QChemHessianData,
+    output_terminated_normally,
+    parse_qchem_hessian_output,
+)
 
-
-_REM_INT_KEYS = {"charge", "multiplicity"}
+# Parameters that ASE's QChem.write_input() writes into $molecule as integers.
+_MOLECULE_KEYS = {"charge", "multiplicity"}
 
 
 def _rem_value(value: Any) -> Any:
-    """Return a value compatible with ASE's QChem.write_input implementation."""
+    """Return a value compatible with ASE's QChem.write_input (which calls ``.upper()``)."""
 
     if value is None:
         return None
@@ -26,32 +31,27 @@ def _rem_value(value: Any) -> Any:
     return str(value)
 
 
-def _normalize_rem_kwargs(kwargs: Mapping[str, Any]) -> dict[str, Any]:
-    normalized: dict[str, Any] = {}
-    for key, value in kwargs.items():
-        if key.lower() in _REM_INT_KEYS:
-            normalized[key] = value
-        else:
-            normalized[key] = _rem_value(value)
-    return normalized
-
-
-def _with_default_rem(kwargs: dict[str, Any], key: str, value: Any) -> None:
-    if not any(existing.lower() == key.lower() for existing in kwargs):
-        kwargs[key] = value
-
-
 class QChemAnalyticHessian(QChem):
-    """Q-Chem ASE calculator that exposes Q-Chem analytic Hessians.
+    """ASE Q-Chem calculator that also provides the ``hessian`` property.
 
-    The class subclasses ASE's :class:`ase.calculators.qchem.QChem` and preserves
-    its normal energy/force behavior.  Hessians are calculated by running a
-    separate Q-Chem ``JOBTYPE FREQ`` calculation with ``VIBMAN_PRINT`` set high
-    enough to print the mass-weighted Hessian matrices.
+    Energies and forces behave exactly as in :class:`ase.calculators.qchem.QChem`.
+    Requesting ``hessian`` (via :meth:`get_hessian`, ``get_property("hessian")``
+    or ``calculate(properties=[..., "hessian"])``) runs a Q-Chem
+    ``JOBTYPE FREQ`` job written to ``<label><hessian_label_suffix>.inp/.out``
+    and stores a ``(3N, 3N)`` Cartesian Hessian in eV/Å² in the ASE frame of
+    the ``Atoms`` object.  The result is cached with ASE's normal state
+    checking, so it is reused until the atoms change.
+
+    A calculator constructed with ``jobtype="freq"`` runs every job this way.
+    The FREQ job also yields the energy; it does not print a gradient, so a
+    later ``get_forces()`` call at the same geometry runs a FORCE job.
+
+    REM keywords are case-insensitive (``JOBTYPE`` and ``jobtype`` are the same
+    key).  Non-string values are converted to strings for ASE.
     """
 
     name = "QChemAnalyticHessian"
-    implemented_properties = tuple(dict.fromkeys([*QChem.implemented_properties, "hessian"]))
+    implemented_properties = [*QChem.implemented_properties, "hessian"]
 
     def __init__(
         self,
@@ -64,26 +64,44 @@ class QChemAnalyticHessian(QChem):
         pbs: bool = False,
         basisfile: str | None = None,
         ecpfile: str | None = None,
-        atoms: Any = None,
+        atoms: Atoms | None = None,
         *,
-        vibman_print: int | str = 6,
+        vibman_print: int = 6,
         hessian_label_suffix: str = "_freq",
         hessian_scratch: str | None = None,
         no_reorient: bool = True,
+        geometry_tolerance: float = 1e-4,
         **kwargs: Any,
     ) -> None:
+        """
+        Parameters (in addition to :class:`ase.calculators.qchem.QChem`)
+        ----------------------------------------------------------------
+        vibman_print
+            ``VIBMAN_PRINT`` for FREQ jobs; raised to at least 4, which Q-Chem
+            needs to print the mass-weighted Hessian.
+        hessian_label_suffix
+            Suffix added to ``label`` for the FREQ job files.  Use ``""`` to
+            write them to ``<label>.inp/.out``.
+        hessian_scratch
+            Q-Chem save name for the FREQ job.  Defaults to ``scratch``.
+        no_reorient
+            Add ``NO_REORIENT TRUE`` unless the REM already sets it.  The
+            parser also undoes any reorientation it detects.
+        geometry_tolerance
+            Maximum aligned RMSD (Å) between the FREQ output geometry and the
+            ``Atoms`` object; larger differences raise ``CalculationFailed``.
+        """
+
         self.vibman_print = int(vibman_print)
         self.hessian_label_suffix = hessian_label_suffix
         self.hessian_scratch = hessian_scratch
         self.qchem_scratch = scratch
-        self.qchem_np = int(np)
-        self.qchem_nt = int(nt)
-        self.qchem_pbs = bool(pbs)
-        self.last_hessian_data: QChemHessianData | None = None
+        self.geometry_tolerance = float(geometry_tolerance)
+        self.hessian_data: QChemHessianData | None = None
 
-        rem_kwargs = dict(kwargs)
-        if no_reorient:
-            _with_default_rem(rem_kwargs, "no_reorient", True)
+        rem = dict(kwargs)
+        if no_reorient and not any(key.lower() == "no_reorient" for key in rem):
+            rem["no_reorient"] = True
         super().__init__(
             restart=restart,
             ignore_bad_restart_file=ignore_bad_restart_file,
@@ -95,74 +113,109 @@ class QChemAnalyticHessian(QChem):
             basisfile=basisfile,
             ecpfile=ecpfile,
             atoms=atoms,
-            **_normalize_rem_kwargs(rem_kwargs),
+            **rem,
         )
-        jobtype = str(self.parameters.get("jobtype", "") or "").lower()
-        if jobtype == "freq":
+
+    # ------------------------------------------------------------------ parameters
+    def set(self, **kwargs: Any) -> dict[str, Any]:
+        """Lower-case REM keys, reject case-duplicates, and stringify values for ASE."""
+
+        normalized: dict[str, Any] = {}
+        for key, value in kwargs.items():
+            low = key.lower()
+            if low in normalized:
+                raise ValueError(f"REM keyword {low!r} given twice (keys are case-insensitive)")
+            normalized[low] = value
+        if "vibman_print" in normalized:
+            value = normalized.pop("vibman_print")
+            if value is not None:
+                self.vibman_print = int(value)
+        for key, value in normalized.items():
+            if key not in _MOLECULE_KEYS:
+                normalized[key] = _rem_value(value)
+        return super().set(**normalized)
+
+    # ------------------------------------------------------------------ running jobs
+    def calculate(
+        self,
+        atoms: Atoms | None = None,
+        properties: list[str] | tuple[str, ...] = ("energy",),
+        system_changes: list[str] | tuple[str, ...] = tuple(all_changes),
+    ) -> None:
+        user_freq = str(self.parameters.get("jobtype") or "").lower() == "freq"
+        if "hessian" not in properties and not user_freq:
+            super().calculate(atoms, properties, system_changes)
+            return
+
+        saved_prefix = self.prefix
+        saved_parameters = dict(self.parameters)
+        saved_command = self.command
+        try:
+            self.parameters["jobtype"] = "freq"
             self.parameters["vibman_print"] = str(max(self.vibman_print, 4))
+            self.prefix = f"{saved_prefix}{self.hessian_label_suffix}"
+            if self.hessian_scratch is not None and self.command is not None:
+                base = self.command
+                if self.qchem_scratch is not None:
+                    base = base.removesuffix(f" {self.qchem_scratch}")
+                self.command = f"{base} {self.hessian_scratch}"
+            super().calculate(atoms, properties, system_changes)
+        finally:
+            self.prefix = saved_prefix
+            self.parameters.clear()
+            self.parameters.update(saved_parameters)
+            self.command = saved_command
 
     def read_results(self) -> None:
-        """Read standard Q-Chem results and parse a Hessian when present."""
+        """Read energy/forces as ASE does; for FREQ jobs also read the Hessian."""
 
         super().read_results()
-        atoms = getattr(self, "atoms", None)
-        if atoms is None:
+        if str(self.parameters.get("jobtype") or "").lower() != "freq":
             return
-        output_path = Path(f"{self.label}.out")
-        if not output_path.exists():
-            return
+        output = Path(f"{self.label}.out")
+        if not output_terminated_normally(output):
+            raise CalculationFailed(f"Q-Chem FREQ job did not terminate normally; see {output}")
         try:
             data = parse_qchem_hessian_output(
-                output_path,
-                reference_positions=atoms.positions,
-                reference_symbols=atoms.get_chemical_symbols(),
+                output,
+                reference_positions=self.atoms.positions,
+                reference_symbols=self.atoms.get_chemical_symbols(),
+                geometry_tolerance=self.geometry_tolerance,
             )
-        except ValueError:
-            # Energy/force Q-Chem jobs do not print Hessians.  Leave normal ASE
-            # behavior unchanged for those calculations.
-            return
-        self.last_hessian_data = data
+        except ValueError as err:
+            raise CalculationFailed(str(err)) from err
+        self.hessian_data = data
         self.results["hessian"] = data.cartesian_hessian_ev_a2
 
-    def get_hessian(self, atoms: Any | None = None) -> np.ndarray:
-        """Return an analytic Cartesian Hessian in ``eV/A^2``.
+    # ------------------------------------------------------------------ public API
+    def get_hessian(self, atoms: Atoms | None = None) -> np.ndarray:
+        """Cartesian Hessian, shape ``(3N, 3N)``, eV/Å², atom-major (x1, y1, z1, x2, ...).
 
-        A separate Q-Chem frequency calculation is always run so that Hessian
-        evaluations in optimizers and workflows do not accidentally reuse stale
-        energy/force results.
+        Same convention as ``ase.calculators.ff.ForceField.get_hessian`` and
+        Sella's ``hessian_function``.  Equivalent to
+        ``self.get_property("hessian", atoms)``.
         """
 
-        if atoms is None:
-            atoms = getattr(self, "atoms", None)
-        if atoms is None:
-            raise ValueError("get_hessian() requires an ASE Atoms object")
+        return self.get_property("hessian", atoms)
 
-        calc = self._frequency_calculator()
-        calc.calculate(atoms, properties=["hessian"], system_changes=all_changes)
-        hessian = calc.results.get("hessian")
-        if hessian is None:
-            raise RuntimeError(
-                f"Q-Chem frequency calculation did not produce a Hessian; see {calc.label}.out"
-            )
-        self.last_hessian_data = calc.last_hessian_data
-        return np.asarray(hessian, dtype=float)
+    def get_vibrations(self, atoms: Atoms | None = None) -> VibrationsData:
+        """Return an :class:`ase.vibrations.VibrationsData` built from the analytic Hessian.
 
-    def _frequency_calculator(self) -> "QChemAnalyticHessian":
-        rem = dict(self.parameters)
-        rem["jobtype"] = "freq"
-        rem.pop("vibman_print", None)
-        _with_default_rem(rem, "no_reorient", True)
+        The atoms carry the masses Q-Chem used (most abundant isotopes), so
+        frequencies are comparable to Q-Chem's.  ``VibrationsData`` does not
+        project out translations/rotations; at non-stationary geometries
+        those six modes are not exactly zero.
+        """
 
-        return type(self)(
-            label=f"{self.label}{self.hessian_label_suffix}",
-            scratch=self.hessian_scratch if self.hessian_scratch is not None else self.qchem_scratch,
-            np=self.qchem_np,
-            nt=self.qchem_nt,
-            pbs=self.qchem_pbs,
-            basisfile=self.basisfile,
-            ecpfile=self.ecpfile,
-            vibman_print=self.vibman_print,
-            hessian_label_suffix=self.hessian_label_suffix,
-            hessian_scratch=self.hessian_scratch,
-            **dict(rem),
-        )
+        hessian = self.get_hessian(atoms)
+        vib_atoms = (atoms if atoms is not None else self.atoms).copy()
+        vib_atoms.calc = None
+        assert self.hessian_data is not None
+        vib_atoms.set_masses(self.hessian_data.qchem_masses_amu)
+        return VibrationsData.from_2d(vib_atoms, hessian)
+
+    @property
+    def last_hessian_data(self) -> QChemHessianData | None:
+        """Backward-compatible alias for :attr:`hessian_data`."""
+
+        return self.hessian_data
