@@ -114,8 +114,8 @@ class QChemAnalyticHessian(QChem):
         try:
             data = parse_qchem_hessian_output(
                 output_path,
-                natoms=len(atoms),
-                fallback_masses_amu=np.asarray(atoms.get_masses(), dtype=float),
+                reference_positions=atoms.positions,
+                reference_symbols=atoms.get_chemical_symbols(),
             )
         except ValueError:
             # Energy/force Q-Chem jobs do not print Hessians.  Leave normal ASE
