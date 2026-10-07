@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "qchem-analytic-hessian"
+name = "qchem-hessian"
 version = "0.1.0"
-description = "ASE Q-Chem calculator subclass with analytic Hessian support from Q-Chem frequency jobs"
+description = "ASE Q-Chem calculator subclass that provides Hessians from Q-Chem frequency jobs"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Gomes Lab" }]
@@ -21,7 +21,7 @@ dev = ["pytest", "ruff", "mypy"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-qchem_analytic_hessian = ["py.typed"]
+qchem_hessian = ["py.typed"]
 
 [tool.ruff]
 line-length = 100
@@ -30,3 +30,6 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
