@@ -4,12 +4,11 @@ import numpy as np
 
 from qchem_analytic_hessian.parser import parse_qchem_hessian_output
 
+SAMPLE = Path(__file__).with_name("da.qcin.out")
 
-def test_parse_sample_qchem_output_if_available():
-    sample = Path("da.qcin.out")
-    if not sample.exists():
-        return
-    data = parse_qchem_hessian_output(sample, natoms=16)
+
+def test_parse_sample_qchem_output():
+    data = parse_qchem_hessian_output(SAMPLE, natoms=16)
     assert data.cartesian_hessian_ev_a2.shape == (48, 48)
     assert data.mass_weighted_hessian_au.shape == (48, 48)
     assert data.projected_mass_weighted_hessian_au is not None

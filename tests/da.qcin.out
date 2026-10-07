@@ -1,5 +1,5 @@
 This is a multi-thread run using 8 threads
-/Users/jsgomes/projects2/opt/qchem/exe/qcprog.exe .da.qcin.266593.qcin.1 /nfsscratch/jsgomes/QCSCRATCH/qchem266593/
+<qchem-exe>/qcprog.exe .da.qcin.266593.qcin.1 <scratch>/qchem266593/
 
                   Welcome to Q-Chem
      A Quantum Leap Into The Future Of Chemistry
@@ -93,12 +93,12 @@ This is a multi-thread run using 8 threads
 
  Q-Chem begins on Fri May 22 10:06:49 2026  
 
- Host: argon-itf-bx53-05.hpc
+ Host: <hostname>
 0
 
-     Scratch files written to /nfsscratch/jsgomes/QCSCRATCH/qchem266593//
- Processing $rem in /Users/jsgomes/projects2/opt/qchem/config/preferences:
- Processing $rem in /Users/jsgomes/.qchemrc:
+     Scratch files written to <scratch>/qchem266593//
+ Processing $rem in <qchem-install>/config/preferences:
+ Processing $rem in <home>/.qchemrc:
 
  Checking the input file for inconsistencies... 	...done.
 

@@ -18,8 +18,6 @@ From this directory:
 python -m pip install -e .
 ```
 
-Install in the same environment as `mliptools` so that `mliptools --calculator qchem` can import the class.
-
 ## Minimal use
 
 ```python
@@ -41,28 +39,6 @@ atoms.calc = QChemAnalyticHessian(
 energy = atoms.get_potential_energy()
 forces = atoms.get_forces()
 hessian_ev_a2 = atoms.calc.get_hessian(atoms)
-```
-
-For `mliptools`, use JSON calculator kwargs:
-
-```bash
-mliptools freq ts_guess.xyz \
-  --calculator qchem \
-  --calculator-kwargs '{"method":"hf", "basis":"sto-3g", "nt":8, "label":"qchem/freq"}'
-```
-
-or in a workflow YAML:
-
-```yaml
-calculator: qchem
-calculator_kwargs:
-  method: wb97m-v
-  basis: def2-tzvpd
-  nt: 8
-  label: qchem/run
-  scf_convergence: 8
-  thresh: 12
-  vibman_print: 6
 ```
 
 ## Notes
