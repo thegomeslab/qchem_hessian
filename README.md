@@ -1,4 +1,4 @@
-# qchem-analytic-hessian
+# qchem-hessian
 
 An extension of ASE's `ase.calculators.qchem.QChem` calculator that adds the
 `hessian` property, computed by a Q-Chem `JOBTYPE FREQ` job instead of by finite
@@ -26,10 +26,10 @@ Q-Chem must be on `PATH` as `qchem` (the same requirement as ASE's calculator).
 
 ```python
 from ase.io import read
-from qchem_analytic_hessian import QChemAnalyticHessian
+from qchem_hessian import QChemHessian
 
 atoms = read("ts_guess.xyz")
-atoms.calc = QChemAnalyticHessian(
+atoms.calc = QChemHessian(
     label="qchem/ts_guess",
     method="wb97m-v",
     basis="def2-tzvpd",

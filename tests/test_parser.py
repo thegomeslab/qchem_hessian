@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from ase.io import read
 
-from qchem_analytic_hessian.parser import (
+from qchem_hessian.parser import (
     HESSIAN_HA_BOHR2_TO_EV_A2,
     _floats,
     parse_qchem_hessian_output,

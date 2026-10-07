@@ -1,4 +1,4 @@
-"""ASE Q-Chem calculator subclass with analytic Hessian support."""
+"""ASE Q-Chem calculator subclass with Hessian support."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from ase.calculators.calculator import CalculationFailed, FileIOCalculator, all_
 from ase.calculators.qchem import QChem
 from ase.vibrations import VibrationsData
 
-from qchem_analytic_hessian.parser import (
+from qchem_hessian.parser import (
     QChemHessianData,
     output_terminated_normally,
     parse_qchem_hessian_output,
@@ -31,7 +31,7 @@ def _rem_value(value: Any) -> Any:
     return str(value)
 
 
-class QChemAnalyticHessian(QChem):
+class QChemHessian(QChem):
     """ASE Q-Chem calculator that also provides the ``hessian`` property.
 
     Energies and forces behave exactly as in :class:`ase.calculators.qchem.QChem`.
@@ -50,7 +50,7 @@ class QChemAnalyticHessian(QChem):
     key).  Non-string values are converted to strings for ASE.
     """
 
-    name = "QChemAnalyticHessian"
+    name = "QChemHessian"
     implemented_properties = [*QChem.implemented_properties, "hessian"]
 
     def __init__(
@@ -199,7 +199,7 @@ class QChemAnalyticHessian(QChem):
         return self.get_property("hessian", atoms)
 
     def get_vibrations(self, atoms: Atoms | None = None) -> VibrationsData:
-        """Return an :class:`ase.vibrations.VibrationsData` built from the analytic Hessian.
+        """Return an :class:`ase.vibrations.VibrationsData` built from the Q-Chem Hessian.
 
         The atoms carry the masses Q-Chem used (most abundant isotopes), so
         frequencies are comparable to Q-Chem's.  ``VibrationsData`` does not
